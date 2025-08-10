@@ -1,0 +1,303 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Chess</title>
+    <link rel="stylesheet" href="chessboard.css">
+    <style>
+        body { font-family: Arial; margin: 20px; display: flex; gap: 20px; }
+        #board { width: 400px; }
+        #gameInfo { width: 300px; }
+        button { margin: 5px; padding: 10px; font-size: 14px; }
+        #status { margin: 10px 0; font-weight: bold; }
+        #moveHistory { border: 1px solid #ccc; padding: 10px; height: 200px; overflow-y: auto; background: #f9f9f9; }
+        .move { margin: 2px 0; }
+        #engineSettings { border: 1px solid #ccc; padding: 10px; margin: 10px 0; background: #f0f0f0; }
+        .setting { margin: 5px 0; }
+        label { display: inline-block; width: 80px; font-size: 12px; }
+        input[type="range"] { width: 120px; }
+        input[type="number"] { width: 60px; }
+        .setting-value { font-weight: bold; color: #333; }
+    </style>
+</head>
+<body>
+    <div>
+        <h1>Simple Chess</h1>
+        <div id="board"></div>
+        <div id="status">White to move</div>
+        
+        <button onclick="newGame()">New Game</button>
+        <button onclick="undoMove()">Undo</button>
+        <button onclick="computerPlay()">Computer Play</button>
+    </div>
+    
+    <div id="gameInfo">
+        <h3>Engine Settings</h3>
+        <div id="engineSettings">
+            <div class="setting">
+                <label>Depth:</label>
+                <input type="range" id="depthSlider" min="1" max="20" value="12">
+                <span id="depthValue" class="setting-value">12</span>
+            </div>
+            <div class="setting">
+                <label>Time (sec):</label>
+                <input type="range" id="timeSlider" min="1" max="30" value="5">
+                <span id="timeValue" class="setting-value">5</span>
+            </div>
+            <div class="setting">
+                <label>Skill:</label>
+                <input type="range" id="skillSlider" min="0" max="20" value="20">
+                <span id="skillValue" class="setting-value">20</span>
+            </div>
+            <div class="setting">
+                <label>Hash (MB):</label>
+                <input type="range" id="hashSlider" min="16" max="1024" value="128">
+                <span id="hashValue" class="setting-value">128</span>
+            </div>
+            <div class="setting">
+                <input type="checkbox" id="useTime" checked>
+                <label>Use time limit instead of depth</label>
+            </div>
+        </div>
+        
+        <h3>Move History</h3>
+        <div id="moveHistory"></div>
+    </div>
+    
+    <script src="jquery.js"></script>
+    <script src="chess.js"></script>
+    <script src="chessboard.js"></script>
+    
+    <script>
+        var game = new Chess();
+        var board = null;
+        var stockfish = null;
+        var isComputerThinking = false;
+        
+        // Engine settings
+        var engineSettings = {
+            depth: 12,
+            time: 5000,
+            skill: 20,
+            hash: 128,
+            useTime: true
+        };
+        
+        // Initialize Stockfish
+        function initStockfish() {
+            try {
+                stockfish = new Worker('stockfish.js');
+                
+                stockfish.addEventListener('message', function(e) {
+                    console.log('Stockfish says:', e.data);
+                    
+                    if (e.data.includes('bestmove')) {
+                        var bestMove = e.data.split(' ')[1];
+                        if (bestMove && bestMove !== '(none)') {
+                            var move = game.move({
+                                from: bestMove.slice(0, 2),
+                                to: bestMove.slice(2, 4),
+                                promotion: 'q'
+                            });
+                            
+                            if (move) {
+                                board.position(game.fen());
+                                updateMoveHistory();
+                                updateStatus();
+                            }
+                        }
+                        isComputerThinking = false;
+                        document.getElementById('status').textContent = document.getElementById('status').textContent.replace(' (Computer thinking...)', '');
+                    }
+                });
+                
+                stockfish.addEventListener('error', function(e) {
+                    console.error('Stockfish error:', e);
+                    stockfish = null;
+                });
+                
+                // Initialize engine with settings
+                stockfish.postMessage('uci');
+                stockfish.postMessage('setoption name Hash value ' + engineSettings.hash);
+                stockfish.postMessage('setoption name Skill Level value ' + engineSettings.skill);
+                stockfish.postMessage('ucinewgame');
+                console.log('Stockfish initialized');
+                
+            } catch (e) {
+                console.error('Failed to load Stockfish:', e);
+                stockfish = null;
+            }
+        }
+        
+        // Update engine settings
+        function updateEngineSettings() {
+            if (stockfish) {
+                stockfish.postMessage('setoption name Hash value ' + engineSettings.hash);
+                stockfish.postMessage('setoption name Skill Level value ' + engineSettings.skill);
+            }
+        }
+        
+        // Initialize board
+        function initBoard() {
+            board = Chessboard('board', {
+                draggable: true,
+                position: 'start',
+                onDragStart: onDragStart,
+                onDrop: onDrop,
+                onSnapEnd: onSnapEnd
+            });
+        }
+        
+        function onDragStart(source, piece, position, orientation) {
+            if (game.game_over() || isComputerThinking) return false;
+            if ((game.turn() === 'w' && piece.search(/^b/) !== -1) ||
+                (game.turn() === 'b' && piece.search(/^w/) !== -1)) {
+                return false;
+            }
+        }
+        
+        function onDrop(source, target) {
+            var move = game.move({
+                from: source,
+                to: target,
+                promotion: 'q'
+            });
+            
+            if (move === null) return 'snapback';
+            updateMoveHistory();
+            updateStatus();
+        }
+        
+        function onSnapEnd() {
+            board.position(game.fen());
+        }
+        
+        function undoMove() {
+            game.undo();
+            board.position(game.fen());
+            updateMoveHistory();
+            updateStatus();
+        }
+        
+        function newGame() {
+            game.reset();
+            board.start();
+            updateMoveHistory();
+            updateStatus();
+        }
+        
+        function computerPlay() {
+            if (game.game_over() || isComputerThinking) return;
+            
+            if (stockfish) {
+                console.log('Sending position to Stockfish:', game.fen());
+                isComputerThinking = true;
+                document.getElementById('status').textContent += ' (Computer thinking...)';
+                
+                stockfish.postMessage('position fen ' + game.fen());
+                
+                // Use either time or depth based on settings
+                if (engineSettings.useTime) {
+                    stockfish.postMessage('go movetime ' + engineSettings.time);
+                } else {
+                    stockfish.postMessage('go depth ' + engineSettings.depth);
+                }
+            } else {
+                console.log('Stockfish not available, using random move');
+                // Fallback to random move
+                var possibleMoves = game.moves();
+                if (possibleMoves.length > 0) {
+                    var randomMove = possibleMoves[Math.floor(Math.random() * possibleMoves.length)];
+                    game.move(randomMove);
+                    board.position(game.fen());
+                    updateMoveHistory();
+                    updateStatus();
+                }
+            }
+        }
+        
+        function updateStatus() {
+            var status = '';
+            if (game.in_checkmate()) {
+                status = 'Game over: ' + (game.turn() === 'b' ? 'White' : 'Black') + ' wins';
+            } else if (game.in_draw()) {
+                status = 'Game over: Draw';
+            } else {
+                status = (game.turn() === 'w' ? 'White' : 'Black') + ' to move';
+                if (game.in_check()) status += ' (in check)';
+            }
+            document.getElementById('status').textContent = status;
+        }
+        
+        function updateMoveHistory() {
+            var history = game.history();
+            var historyDiv = document.getElementById('moveHistory');
+            historyDiv.innerHTML = '';
+            
+            for (var i = 0; i < history.length; i += 2) {
+                var moveNum = Math.floor(i / 2) + 1;
+                var whiteMove = history[i];
+                var blackMove = history[i + 1] || '';
+                
+                var moveDiv = document.createElement('div');
+                moveDiv.className = 'move';
+                moveDiv.textContent = moveNum + '. ' + whiteMove + (blackMove ? ' ' + blackMove : '');
+                historyDiv.appendChild(moveDiv);
+            }
+            
+            historyDiv.scrollTop = historyDiv.scrollHeight;
+        }
+        
+        $(document).ready(function() {
+            initBoard();
+            initStockfish();
+            updateMoveHistory();
+            
+            // Setup slider event handlers
+            $('#depthSlider').on('input', function() {
+                engineSettings.depth = parseInt(this.value);
+                $('#depthValue').text(this.value);
+            });
+            
+            $('#timeSlider').on('input', function() {
+                engineSettings.time = parseInt(this.value) * 1000; // Convert to milliseconds
+                $('#timeValue').text(this.value);
+            });
+            
+            $('#skillSlider').on('input', function() {
+                engineSettings.skill = parseInt(this.value);
+                $('#skillValue').text(this.value);
+                updateEngineSettings();
+            });
+            
+            $('#hashSlider').on('input', function() {
+                engineSettings.hash = parseInt(this.value);
+                $('#hashValue').text(this.value);
+                updateEngineSettings();
+            });
+            
+            $('#useTime').on('change', function() {
+                engineSettings.useTime = this.checked;
+            });
+        });
+        
+        window.chessAPI = {
+            move: function(from, to) {
+                var move = game.move({from: from, to: to, promotion: 'q'});
+                if (move) {
+                    board.position(game.fen());
+                    updateMoveHistory();
+                    updateStatus();
+                    return true;
+                }
+                return false;
+            },
+            undo: undoMove,
+            newGame: newGame,
+            computerPlay: computerPlay,
+            getStatus: function() { return game.fen(); },
+            getMoves: function() { return game.history(); }
+        };
+    </script>
+</body>
+</html>
